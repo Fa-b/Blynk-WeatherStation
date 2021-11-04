@@ -23,10 +23,6 @@
 //#define ERROR_TERMINAL    V100
 #define ERROR_BRIDGE        V5
 
-#define MAXCURRENT_mA 1000
-#define MAXDISPLAYCURRENT_mA 1500
-#define MAXPOWERCORRECTION_PERCENT 100 * MAXDISPLAYCURRENT_mA / MAXCURRENT_mA
-
 // Don't touch from here:
 typedef struct {
     const char name[64] = DEVICE_NAME;
