@@ -23,11 +23,14 @@
 #include "command_parser.h"
 
 #define SAMPLE_INTERVAL 1000  // 1000 milliseconds
+#define ADC_ERROR_OFFSET 18   // Somehow there is a massive offset error, this has to be manually determined once per ESP8266
+#define ACS712_VOLTS_PER_AMPERE ((double) 0.066) // 66mV for -30A, 100mV for -20A, 185mV for -5A
 
-#define BME_SDA_PIN                     0
-#define BME_SCL_PIN                     2
-#define DALLAS_WIRE_PIN                 14
-#define TRACER_WREN_PIN                 4
+#define SDA_PIN                     0
+#define SCL_PIN                     2
+#define DALLAS_WIRE_PIN             14
+#define TRACER_WREN_PIN             4
+#define ADS1000_ADDR                0x48 // for type BD0, BD1 addr is 0x49
 
 #define vPIN_PV_POWER                   V11
 #define vPIN_PV_CURRENT                 V12
@@ -81,6 +84,7 @@ float last_altitude = 0;
 float last_temperature = 0;
 float last_ambient = 0;
 float last_voltage = 0;
+float last_current = 0;
 
 unsigned int regNum = 0;
 float battChargeCurrent, battDischargeCurrent, battOverallCurrent, battChargePower;
@@ -96,6 +100,11 @@ static void writeAltitude(float);
 static void writeTemperature(float);
 static void writeAmbient(float);
 static void writeVoltage(float);
+static void writeCurrent(float);
+
+
+static void resetADS1000(uint8_t addr);
+static int16_t readADS1000(uint8_t addr);
 
 static void periodicRead(void);
 
@@ -118,12 +127,14 @@ RegistryList Registries = {
 
 void setup() {
     Blynk.begin(auth, ssid, pass, hostname, 8080);
-
-    Wire.begin(0, 2);  //SDA, SCL
+    Wire.begin(SDA_PIN, SCL_PIN);
     bm280.beginI2C(Wire);
     ds18b20.begin();
+    ds18b20.setResolution(11);
     // Don't wait for conversion results (watchdog)
     ds18b20.setWaitForConversion(false);
+
+    resetADS1000(ADS1000_ADDR);
     
     pinMode(TRACER_WREN_PIN, OUTPUT);
     digitalWrite(TRACER_WREN_PIN, 0);
@@ -139,20 +150,9 @@ void setup() {
         digitalWrite(TRACER_WREN_PIN, 0);
     });
 
-    Blynk.virtualWrite(V4, "clr");
-    Blynk.virtualWrite(V4, "add", 0, "Pressure", " hPa");
-    writePressure(bm280.readFloatPressure() / 100.0F);
-    Blynk.virtualWrite(V4, "add", 1, "Altitude", " m");
-    writeAltitude(bm280.readFloatAltitudeMeters());
-    Blynk.virtualWrite(V4, "add", 2, "Humidity", " % RH");
-    writeHumidity(bm280.readFloatHumidity());
-    Blynk.virtualWrite(V4, "add", 3, "Temperature", " °C");
-    writeTemperature(bm280.readTempC());
-    //ds18b20.requestTemperatures();
-    Blynk.virtualWrite(V4, "add", 4, "Ambient", " °C");
-    writeAmbient(ds18b20.getTempCByIndex(0));
-    Blynk.virtualWrite(V4, "add", 5, "Voltage", " V");
-    writeVoltage(0.00);
+    node.idle([]() {
+        ESP.wdtFeed();
+    });
 }
 
 BLYNK_CONNECTED() {
@@ -163,6 +163,15 @@ BLYNK_CONNECTED() {
 	// OTA Server update controller
     checkForUpdates();
     // Don't do this when updates are found
+    Blynk.virtualWrite(V4, "clr");
+    Blynk.virtualWrite(V4, "add", 0, "Pressure", "");
+    Blynk.virtualWrite(V4, "add", 1, "Altitude", "");
+    Blynk.virtualWrite(V4, "add", 2, "Humidity", "");
+    Blynk.virtualWrite(V4, "add", 3, "Outside", "");
+    Blynk.virtualWrite(V4, "add", 4, "Inside", "");
+    Blynk.virtualWrite(V4, "add", 5, "Reference Voltage", "");
+    Blynk.virtualWrite(V4, "add", 6, "Load Current", "");
+
     updater.attach_ms(SAMPLE_INTERVAL, periodicRead);
 }
 
@@ -198,22 +207,52 @@ static void writeTemperature(float value) {
     std::stringstream stream;
     Blynk.virtualWrite(V3, value);
     stream << std::fixed << std::setprecision(1) << value;
-    Blynk.virtualWrite(V4, "update", 3, "Temperature", (stream.str() + " °C").c_str());
+    Blynk.virtualWrite(V4, "update", 3, "Outside", (stream.str() + " °C").c_str());
     last_temperature = value;
 }
 
 static void writeAmbient(float value) {
     std::stringstream stream;
     stream << std::fixed << std::setprecision(1) << value;
-    Blynk.virtualWrite(V4, "update", 4, "Ambient", (stream.str() + " °C").c_str());
+    Blynk.virtualWrite(V4, "update", 4, "Inside", (stream.str() + " °C").c_str());
     last_ambient = value;
 }
 
 static void writeVoltage(float value) {
     std::stringstream stream;
     stream << std::fixed << std::setprecision(2) << value;
-    Blynk.virtualWrite(V4, "update", 5, "Voltage", (stream.str() + " V").c_str());
+    Blynk.virtualWrite(V4, "update", 5, "Reference Voltage", (stream.str() + " V").c_str());
     last_voltage = value;
+}
+
+static void writeCurrent(float value) {
+    std::stringstream stream;
+    stream << std::fixed << std::setprecision(2) << value;
+    Blynk.virtualWrite(V4, "update", 6, "Load Current", (stream.str() + " A").c_str());
+    last_current = value;
+}
+
+static void resetADS1000(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    // Default setting
+    // ST/BSY 0 0 SC 0 0 PGA1 PGA0
+    Wire.write(0x80);
+    Wire.endTransmission(addr);
+}
+
+static int16_t readADS1000(uint8_t addr) {
+    union adc_data {
+        uint8_t arr[2];
+        int16_t val;
+    } data;
+
+    uint8_t len = Wire.requestFrom(addr, 2);
+    if (len >= 2) {
+        data.arr[1] = Wire.read();
+        data.arr[0] = Wire.read();
+    }
+
+    return data.val;
 }
 
 static void periodicRead() {
@@ -223,8 +262,9 @@ static void periodicRead() {
     float temperature = bm280.readTempC();
     ds18b20.requestTemperaturesByIndex(0);
     float ambient = ds18b20.getTempCByIndex(0);
-    float voltage = analogRead(A0);
+    float voltage = analogRead(A0) - ADC_ERROR_OFFSET;
     voltage /= 100;
+    float current = (double)readADS1000(ADS1000_ADDR) * voltage / (2048 * ACS712_VOLTS_PER_AMPERE);
 
     if ((int)(last_pressure * 100) != (int)(pressure * 100)) {
         writePressure(pressure);
@@ -254,6 +294,11 @@ static void periodicRead() {
     if ((int)(last_voltage * 100) != (int)(voltage * 100)) {
         writeVoltage(voltage);
         Blynk.virtualWrite(V4, "pick", 5);
+    }
+
+    if ((int)(last_current * 100) != (int)(current * 100)) {
+        writeCurrent(current);
+        Blynk.virtualWrite(V4, "pick", 6);
     }
 
     //ESP.wdtDisable();
