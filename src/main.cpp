@@ -59,9 +59,9 @@ char pass[] = WIFI_PASS;
 char remoteAuth[] = REMOTE_AUTH;
 
 // extern in typedefs.h
-#ifdef ERROR_TERMINAL
+#ifdef DEBUG_TERMINAL
 WidgetTerminal terminal(DEBUG_TERMINAL);
-#elif ERROR_BRIDGE
+#elif DEBUG_BRIDGE
 BridgeTerminal bridge(DEBUG_BRIDGE);
 #endif
 
@@ -169,17 +169,10 @@ BLYNK_CONNECTED() {
 
 	// OTA Server update controller
     checkForUpdates();
-    // Don't do this when updates are found
-    Blynk.virtualWrite(V4, "clr");
-    Blynk.virtualWrite(V4, "add", 0, "Pressure", "");
-    Blynk.virtualWrite(V4, "add", 1, "Altitude", "");
-    Blynk.virtualWrite(V4, "add", 2, "Humidity", "");
-    Blynk.virtualWrite(V4, "add", 3, "Outside", "");
-    Blynk.virtualWrite(V4, "add", 4, "Inside", "");
-    Blynk.virtualWrite(V4, "add", 5, "Reference Voltage", "");
-    Blynk.virtualWrite(V4, "add", 6, "Load Current", "");
 
-    updater.attach_ms(SAMPLE_INTERVAL, periodicRead);
+    // Don't do this when updates are found
+    updater.once_ms(SAMPLE_INTERVAL, periodicRead);
+
 }
 
 void loop() {
@@ -188,54 +181,31 @@ void loop() {
 
 static void writePressure(float value) {
     std::stringstream stream;
-    Blynk.virtualWrite(V1, value);
-    stream << std::fixed << std::setprecision(2) << value;
-    Blynk.virtualWrite(V4, "update", 0, "Pressure", (stream.str() + " hPa").c_str());
+    Blynk.virtualWrite(V0, value);
     last_pressure = value;
-}
-
-static void writeAltitude(float value) {
-    std::stringstream stream;
-    Blynk.virtualWrite(V2, value);
-    stream << std::fixed << (int)value;
-    Blynk.virtualWrite(V4, "update", 1, "Altitude", (stream.str() + " m").c_str());
-    last_altitude = value;
 }
 
 static void writeHumidity(float value) {
     std::stringstream stream;
-    Blynk.virtualWrite(V0, value);
-    stream << std::fixed << (int)value;
-    Blynk.virtualWrite(V4, "update", 2, "Humidity", (stream.str() + " % RH").c_str());
+    Blynk.virtualWrite(V1, value);
     last_humidity = value;
 }
 
 static void writeTemperature(float value) {
     std::stringstream stream;
-    Blynk.virtualWrite(V3, value);
-    stream << std::fixed << std::setprecision(1) << value;
-    Blynk.virtualWrite(V4, "update", 3, "Outside", (stream.str() + " °C").c_str());
+    Blynk.virtualWrite(V2, value);
     last_temperature = value;
 }
 
 static void writeAmbient(float value) {
     std::stringstream stream;
-    stream << std::fixed << std::setprecision(1) << value;
-    Blynk.virtualWrite(V4, "update", 4, "Inside", (stream.str() + " °C").c_str());
+    Blynk.virtualWrite(V3, value);
     last_ambient = value;
-}
-
-static void writeVoltage(float value) {
-    std::stringstream stream;
-    stream << std::fixed << std::setprecision(2) << value;
-    Blynk.virtualWrite(V4, "update", 5, "Reference Voltage", (stream.str() + " V").c_str());
-    last_voltage = value;
 }
 
 static void writeCurrent(float value) {
     std::stringstream stream;
-    stream << std::fixed << std::setprecision(2) << value;
-    Blynk.virtualWrite(V4, "update", 6, "Load Current", (stream.str() + " A").c_str());
+    Blynk.virtualWrite(V4, value);
     last_current = value;
 }
 
@@ -263,49 +233,37 @@ static int16_t readADS1000(uint8_t addr) {
 }
 
 static void periodicRead() {
-    float humidity = bm280.readFloatHumidity();
     float pressure = bm280.readFloatPressure() / 100.0F;
-    float altitude = bm280.readFloatAltitudeMeters();
+    float humidity = bm280.readFloatHumidity();
     float temperature = bm280.readTempC();
+    float altitude = bm280.readFloatAltitudeMeters();
     ds18b20.requestTemperaturesByIndex(0);
     float ambient = ds18b20.getTempCByIndex(0);
-    float voltage = analogRead(A0) - ADC_ERROR_OFFSET;
-    voltage /= 100;
-    float current = (double)readADS1000(ADS1000_ADDR) * voltage / (2048 * ACS712_VOLTS_PER_AMPERE);
+    float volt_val = analogRead(A0) - ADC_ERROR_OFFSET;
+    volt_val /= 100;
+    float cur_val = readADS1000(ADS1000_ADDR);
+    float current = cur_val * (volt_val / (2048 * ACS712_VOLTS_PER_AMPERE));
+
+    DEBUG_PRINTF("Voltage: %f\nCurrent: %f\n", volt_val, cur_val);
 
     if ((int)(last_pressure * 100) != (int)(pressure * 100)) {
         writePressure(pressure);
-        Blynk.virtualWrite(V4, "pick", 0);
-    }
-
-    if ((int)last_altitude != (int)altitude) {
-        writeAltitude(altitude);
-        Blynk.virtualWrite(V4, "pick", 1);
     }
 
     if ((int)last_humidity != (int)humidity) {
         writeHumidity(humidity);
-        Blynk.virtualWrite(V4, "pick", 2);
     }
 
     if ((int)(last_temperature * 10) != (int)(temperature * 10)) {
         writeTemperature(temperature);
-        Blynk.virtualWrite(V4, "pick", 3);
     }
 
     if ((int)(last_ambient * 10) != (int)(ambient * 10)) {
         writeAmbient(ambient);
-        Blynk.virtualWrite(V4, "pick", 4);
-    }
-
-    if ((int)(last_voltage * 100) != (int)(voltage * 100)) {
-        writeVoltage(voltage);
-        Blynk.virtualWrite(V4, "pick", 5);
     }
 
     if ((int)(last_current * 100) != (int)(current * 100)) {
         writeCurrent(current);
-        Blynk.virtualWrite(V4, "pick", 6);
     }
 
     //ESP.wdtDisable();
@@ -315,6 +273,8 @@ static void periodicRead() {
     if (++regNum >= ARRAY_SIZE(Registries)) {
         regNum = 0;
     }
+    
+    updater.once_ms(SAMPLE_INTERVAL, periodicRead);
 }
 
 static void AddressRegistry_3100() {
