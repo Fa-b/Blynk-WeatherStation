@@ -126,6 +126,11 @@ RegistryList Registries = {
 };
 
 void setup() {
+
+    // Problematic since there may be multiple devices with the same name
+    // Add serial number to hostname
+    WiFi.hostname(String(name) + String("_") + String(ESP.getChipId()));
+
     Blynk.begin(auth, ssid, pass, hostname, 8080);
     Wire.begin(SDA_PIN, SCL_PIN);
     bm280.beginI2C(Wire);
@@ -156,7 +161,9 @@ void setup() {
 }
 
 BLYNK_CONNECTED() {
+#ifdef DEBUG_BRIDGE
     bridge.setAuthToken(remoteAuth);
+#endif
     INFO_PRINT("Just connected.\n");
     DEBUG_PRINT("Debug mode is on which is why I will spam here :-)\n\n");
 
