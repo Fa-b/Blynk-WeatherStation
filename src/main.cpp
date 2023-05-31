@@ -233,38 +233,46 @@ static int16_t readADS1000(uint8_t addr) {
 }
 
 static void periodicRead() {
-    float pressure = bm280.readFloatPressure() / 100.0F;
-    float humidity = bm280.readFloatHumidity();
-    float temperature = bm280.readTempC();
-    float altitude = bm280.readFloatAltitudeMeters();
-    ds18b20.requestTemperaturesByIndex(0);
-    float ambient = ds18b20.getTempCByIndex(0);
-    float volt_val = analogRead(A0) - ADC_ERROR_OFFSET;
-    volt_val /= 100;
-    float cur_val = readADS1000(ADS1000_ADDR);
-    float current = cur_val * (volt_val / (2048 * ACS712_VOLTS_PER_AMPERE));
+    static uint8_t index = 0;
 
-    DEBUG_PRINTF("Voltage: %f\nCurrent: %f\n", volt_val, cur_val);
 
-    if ((int)(last_pressure * 100) != (int)(pressure * 100)) {
-        writePressure(pressure);
-    }
+    //if(index == 0) {
+        float pressure = bm280.readFloatPressure() / 100.0F;
+        if ((int)(last_pressure * 100) != (int)(pressure * 100)) {
+            writePressure(pressure);
+        }
+    //} else if(index == 1) {
+        float humidity = bm280.readFloatHumidity();
+        if ((int)last_humidity != (int)humidity) {
+            writeHumidity(humidity);
+        }
+    //} else if(index == 2) {
+        float temperature = bm280.readTempC();
+        if ((int)(last_temperature * 10) != (int)(temperature * 10)) {
+            writeTemperature(temperature);
+        }
+    //} else if(index == 3) {
+        ds18b20.requestTemperaturesByIndex(0);
+        float ambient = ds18b20.getTempCByIndex(0);
+        if ((int)(last_ambient * 10) != (int)(ambient * 10)) {
+            writeAmbient(ambient);
+        }
+    //} else if(index == 4) {
+        float volt_val = analogRead(A0) - ADC_ERROR_OFFSET;
+        volt_val /= 100;
+        float cur_val = readADS1000(ADS1000_ADDR);
+        float current = cur_val * (volt_val / (2048 * ACS712_VOLTS_PER_AMPERE));
 
-    if ((int)last_humidity != (int)humidity) {
-        writeHumidity(humidity);
-    }
+        if ((int)(last_current * 100) != (int)(current * 100)) {
+            writeCurrent(current);
+        }
+    //}
 
-    if ((int)(last_temperature * 10) != (int)(temperature * 10)) {
-        writeTemperature(temperature);
-    }
+    /*if (++index >= 5) {
+        index = 0;
+    }*/
 
-    if ((int)(last_ambient * 10) != (int)(ambient * 10)) {
-        writeAmbient(ambient);
-    }
-
-    if ((int)(last_current * 100) != (int)(current * 100)) {
-        writeCurrent(current);
-    }
+    //float altitude = bm280.readFloatAltitudeMeters();
 
     //ESP.wdtDisable();
     Registries[regNum]();
